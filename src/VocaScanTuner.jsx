@@ -1,9 +1,8 @@
+// VocaScanTuner.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { CrepeEngine } from "./audio/CrepeEngine";
-import PitchMeter from "./PitchMeter";
 
-const API_BASE = import.meta.env.VITE_API_BASE;
-
+// 周波数 ↔ 音名変換
 function freqToNote(freq) {
   if (!freq || freq <= 0) return "--";
   const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -23,6 +22,53 @@ function noteToFreq(note) {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
+// PitchMeter（中央基準バー）
+function PitchMeter({ pitch, targetFreq, confidence }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!targetFreq) return;
+
+    const minFreq = targetFreq / 2;
+    const maxFreq = targetFreq * 2;
+
+    const centerX = w / 2;
+    // 背景バー
+    ctx.fillStyle = "#eee";
+    ctx.fillRect(0, h / 2 - 10, w, 20);
+
+    // ピッチバー
+    if (pitch) {
+      let pct = (pitch - targetFreq) / (targetFreq - minFreq);
+      pct = Math.max(-1, Math.min(1, pct)); // -1〜1
+      const direction = pct >= 0 ? 1 : -1;
+      const barLength = Math.abs(centerX * pct);
+      const barHeight = 20 * confidence;
+      ctx.fillStyle = "#4caf50";
+      ctx.fillRect(centerX, h/2 - barHeight/2, barLength * direction, barHeight);
+    }
+
+    // 目標ピッチ線
+    ctx.strokeStyle = "#f44336";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(centerX, 0);
+    ctx.lineTo(centerX, h);
+    ctx.stroke();
+
+  }, [pitch, confidence, targetFreq]);
+
+  return <canvas ref={canvasRef} width={300} height={60} style={{ marginTop: "12px" }} />;
+}
+
+// VocaScanTuner
 export default function VocaScanTuner() {
   const engineRef = useRef(null);
   const prevPitchRef = useRef(null);
@@ -30,16 +76,10 @@ export default function VocaScanTuner() {
   const confidenceRef = useRef(0);
   const lastUiUpdateRef = useRef(0);
 
-  const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const streamRef = useRef(null);
-
   const [isRunning, setIsRunning] = useState(false);
   const [pitch, setPitch] = useState(null);
   const [note, setNote] = useState("--");
   const [confidence, setConfidence] = useState(0);
-  const [apiData, setApiData] = useState(null);
-  const [error, setError] = useState(null);
 
   useEffect(() => {
     engineRef.current = new CrepeEngine();
@@ -47,122 +87,57 @@ export default function VocaScanTuner() {
   }, []);
 
   const start = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      chunksRef.current = [];
+    if (!engineRef.current) return;
 
-      // MediaRecorder で録音開始
-      const mediaRecorder = new MediaRecorder(stream);
-      recorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.start();
-
-      // CREPE リアルタイム解析
-      await engineRef.current.start((freq) => {
-        if (!freq || freq <= 0) {
-          confidenceRef.current = 0;
-          return;
-        }
-
-        if (!smoothRef.current) smoothRef.current = freq;
-        smoothRef.current = smoothRef.current * 0.85 + freq * 0.15;
-        const smoothed = smoothRef.current;
-
-        let continuity = 1;
-        if (prevPitchRef.current) {
-          const diff = Math.abs(smoothed - prevPitchRef.current) / prevPitchRef.current;
-          continuity = Math.max(0, 1 - diff * 5);
-        }
-        prevPitchRef.current = smoothed;
-
-        confidenceRef.current = Math.min(1, 0.3 + continuity * 0.7);
-
-        const now = performance.now();
-        if (now - lastUiUpdateRef.current > 150) {
-          lastUiUpdateRef.current = now;
-          setPitch(smoothed);
-          setNote(freqToNote(smoothed));
-          setConfidence(confidenceRef.current);
-        }
-      });
-
-      setIsRunning(true);
-      setError(null);
-    } catch (e) {
-      console.error(e);
-      setError("マイクが使用できません");
-    }
-  };
-
-  const stop = async () => {
-    try {
-      engineRef.current?.stop();
-      setIsRunning(false);
-
-      // 録音停止
-      if (recorderRef.current && recorderRef.current.state !== "inactive") {
-        recorderRef.current.stop();
-
-        // Blob -> Base64 -> API 送信
-        recorderRef.current.onstop = async () => {
-          try {
-            const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-              const base64Audio = reader.result.split(",")[1];
-              const res = await fetch(`${API_BASE}/api/score`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  ...(import.meta.env.VITE_API_KEY && {
-                    Authorization: `Bearer ${import.meta.env.VITE_API_KEY}`,
-                  }),
-                },
-                body: JSON.stringify({ audio: base64Audio }),
-              });
-
-              const text = await res.text();
-              let json;
-              try {
-                json = JSON.parse(text);
-              } catch {
-                throw new Error("API が JSON を返していません");
-              }
-              if (!res.ok) throw new Error(json.error || "API Error");
-              setApiData(json);
-            };
-            reader.readAsDataURL(blob);
-          } catch (e) {
-            console.error(e);
-            setError("API 送信に失敗しました");
-          }
-        };
+    await engineRef.current.start((freq) => {
+      if (!freq || freq <= 0) {
+        confidenceRef.current = 0;
+        return;
       }
 
-      // UI リセット
-      setPitch(null);
-      setNote("--");
-      setConfidence(0);
-      prevPitchRef.current = null;
-      smoothRef.current = null;
-      confidenceRef.current = 0;
-      chunksRef.current = [];
-    } catch (e) {
-      console.error(e);
-      setError("停止処理でエラーが発生しました");
-    }
+      // スムージング
+      if (!smoothRef.current) smoothRef.current = freq;
+      smoothRef.current = smoothRef.current * 0.85 + freq * 0.15;
+      const smoothed = smoothRef.current;
+
+      // 連続性
+      let continuity = 1;
+      if (prevPitchRef.current) {
+        const diff = Math.abs(smoothed - prevPitchRef.current) / prevPitchRef.current;
+        continuity = Math.max(0, 1 - diff * 5);
+      }
+      prevPitchRef.current = smoothed;
+
+      confidenceRef.current = Math.min(1, 0.3 + continuity * 0.7);
+
+      const now = performance.now();
+      if (now - lastUiUpdateRef.current > 150) {
+        lastUiUpdateRef.current = now;
+        setPitch(smoothed);
+        setNote(freqToNote(smoothed));
+        setConfidence(confidenceRef.current);
+      }
+    });
+
+    setIsRunning(true);
+  };
+
+  const stop = () => {
+    engineRef.current?.stop();
+    setIsRunning(false);
+    setPitch(null);
+    setNote("--");
+    setConfidence(0);
+    prevPitchRef.current = null;
+    smoothRef.current = null;
+    confidenceRef.current = 0;
   };
 
   const targetFreq = noteToFreq(note);
 
   return (
     <div style={styles.container}>
-      <h2>VocaScan Tuner v2 + API</h2>
+      <h2>VocaScan Tuner v2</h2>
 
       <div style={styles.panel}>
         <div style={styles.value}>{note}</div>
@@ -170,8 +145,6 @@ export default function VocaScanTuner() {
           Pitch: {pitch ? pitch.toFixed(2) : "--"} Hz
           <br />
           安定度: {(confidence * 100).toFixed(0)}%
-          <br />
-          {apiData && <>API Score: {apiData.score ?? "--"}</>}
         </div>
       </div>
 
@@ -188,41 +161,16 @@ export default function VocaScanTuner() {
           <button onClick={stop} style={styles.stop}>Stop</button>
         )}
       </div>
-
-      {error && <p style={{ color: "red" }}>{error}</p>}
     </div>
   );
 }
 
 const styles = {
   container: { padding: "20px", textAlign: "center", fontFamily: "sans-serif" },
-  panel: {
-    margin: "20px auto",
-    padding: "20px",
-    width: "280px",
-    borderRadius: "12px",
-    background: "#f0f4ff",
-    boxShadow: "0 4px 10px rgba(0,0,0,0.1)"
-  },
+  panel: { margin: "20px auto", padding: "20px", width: "280px", borderRadius: "12px", background: "#f0f4ff", boxShadow: "0 4px 10px rgba(0,0,0,0.1)" },
   value: { fontSize: "48px", fontWeight: "bold" },
   sub: { marginTop: "6px", fontSize: "13px", color: "#555" },
   controls: { marginTop: "20px" },
-  start: {
-    padding: "10px 24px",
-    fontSize: "16px",
-    borderRadius: "8px",
-    border: "none",
-    background: "#4caf50",
-    color: "#fff",
-    cursor: "pointer"
-  },
-  stop: {
-    padding: "10px 24px",
-    fontSize: "16px",
-    borderRadius: "8px",
-    border: "none",
-    background: "#f44336",
-    color: "#fff",
-    cursor: "pointer"
-  }
+  start: { padding: "10px 24px", fontSize: "16px", borderRadius: "8px", border: "none", background: "#4caf50", color: "#fff", cursor: "pointer" },
+  stop: { padding: "10px 24px", fontSize: "16px", borderRadius: "8px", border: "none", background: "#f44336", color: "#fff", cursor: "pointer" }
 };
