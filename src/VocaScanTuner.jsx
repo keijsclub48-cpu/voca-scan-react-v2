@@ -1,7 +1,7 @@
 // VocaScanTuner.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { CrepeEngine } from "./audio/CrepeEngine";
-import PitchMeter from "./PitchMeter"; // ★ 追加
+import PitchMeter from "./PitchMeter";
 
 function freqToNote(freq) {
   if (!freq || freq <= 0) return "--";
@@ -24,10 +24,15 @@ function noteToFreq(note) {
 
 export default function VocaScanTuner() {
   const engineRef = useRef(null);
+  const prevPitchRef = useRef(null);
+  const smoothRef = useRef(null);
+  const confidenceRef = useRef(0);
+  const lastUiUpdateRef = useRef(0);
 
   const [isRunning, setIsRunning] = useState(false);
   const [pitch, setPitch] = useState(null);
   const [note, setNote] = useState("--");
+  const [confidence, setConfidence] = useState(0);
 
   useEffect(() => {
     engineRef.current = new CrepeEngine();
@@ -38,8 +43,33 @@ export default function VocaScanTuner() {
     if (!engineRef.current) return;
 
     await engineRef.current.start((freq) => {
-      setPitch(freq);
-      setNote(freqToNote(freq));
+      if (!freq || freq <= 0) {
+        confidenceRef.current = 0;
+        return;
+      }
+
+      // スムージング
+      if (!smoothRef.current) smoothRef.current = freq;
+      smoothRef.current = smoothRef.current * 0.85 + freq * 0.15;
+      const smoothed = smoothRef.current;
+
+      // 連続性
+      let continuity = 1;
+      if (prevPitchRef.current) {
+        const diff = Math.abs(smoothed - prevPitchRef.current) / prevPitchRef.current;
+        continuity = Math.max(0, 1 - diff * 5);
+      }
+      prevPitchRef.current = smoothed;
+
+      confidenceRef.current = Math.min(1, 0.3 + continuity * 0.7);
+
+      const now = performance.now();
+      if (now - lastUiUpdateRef.current > 150) {
+        lastUiUpdateRef.current = now;
+        setPitch(smoothed);
+        setNote(freqToNote(smoothed));
+        setConfidence(confidenceRef.current);
+      }
     });
 
     setIsRunning(true);
@@ -50,6 +80,10 @@ export default function VocaScanTuner() {
     setIsRunning(false);
     setPitch(null);
     setNote("--");
+    setConfidence(0);
+    prevPitchRef.current = null;
+    smoothRef.current = null;
+    confidenceRef.current = 0;
   };
 
   const targetFreq = noteToFreq(note);
@@ -60,14 +94,16 @@ export default function VocaScanTuner() {
 
       <div style={styles.panel}>
         <div style={styles.value}>{note}</div>
-        <div style={styles.sub}>Pitch: {pitch ? pitch.toFixed(2) : "--"} Hz</div>
+        <div style={styles.sub}>
+          Pitch: {pitch ? pitch.toFixed(2) : "--"} Hz
+          安定度: {(confidence * 100).toFixed(0)}%
+        </div>
       </div>
 
-      {/* ★ 追加：ゲージ */}
       <PitchMeter
         pitch={pitch}
         targetFreq={targetFreq}
-        confidence={pitch ? 1 : 0} // 今は confidence 未使用のため暫定
+        confidence={confidence}
       />
 
       <div style={styles.controls}>
@@ -90,7 +126,7 @@ const styles = {
   panel: {
     margin: "20px auto",
     padding: "20px",
-    width: "260px",
+    width: "280px",
     borderRadius: "12px",
     background: "#f0f4ff",
     boxShadow: "0 4px 10px rgba(0,0,0,0.1)"
@@ -101,7 +137,7 @@ const styles = {
   },
   sub: {
     marginTop: "6px",
-    fontSize: "14px",
+    fontSize: "13px",
     color: "#555"
   },
   controls: {
