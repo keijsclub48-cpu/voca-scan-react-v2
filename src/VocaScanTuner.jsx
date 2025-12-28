@@ -1,7 +1,8 @@
-// VocaScanTuner.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { CrepeEngine } from "./audio/CrepeEngine";
 import PitchMeter from "./PitchMeter";
+
+const API_BASE = import.meta.env.VITE_API_BASE;
 
 function freqToNote(freq) {
   if (!freq || freq <= 0) return "--";
@@ -29,10 +30,16 @@ export default function VocaScanTuner() {
   const confidenceRef = useRef(0);
   const lastUiUpdateRef = useRef(0);
 
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const streamRef = useRef(null);
+
   const [isRunning, setIsRunning] = useState(false);
   const [pitch, setPitch] = useState(null);
   const [note, setNote] = useState("--");
   const [confidence, setConfidence] = useState(0);
+  const [apiData, setApiData] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     engineRef.current = new CrepeEngine();
@@ -40,63 +47,131 @@ export default function VocaScanTuner() {
   }, []);
 
   const start = async () => {
-    if (!engineRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
 
-    await engineRef.current.start((freq) => {
-      if (!freq || freq <= 0) {
-        confidenceRef.current = 0;
-        return;
-      }
+      // MediaRecorder で録音開始
+      const mediaRecorder = new MediaRecorder(stream);
+      recorderRef.current = mediaRecorder;
 
-      // スムージング
-      if (!smoothRef.current) smoothRef.current = freq;
-      smoothRef.current = smoothRef.current * 0.85 + freq * 0.15;
-      const smoothed = smoothRef.current;
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
 
-      // 連続性
-      let continuity = 1;
-      if (prevPitchRef.current) {
-        const diff = Math.abs(smoothed - prevPitchRef.current) / prevPitchRef.current;
-        continuity = Math.max(0, 1 - diff * 5);
-      }
-      prevPitchRef.current = smoothed;
+      mediaRecorder.start();
 
-      confidenceRef.current = Math.min(1, 0.3 + continuity * 0.7);
+      // CREPE リアルタイム解析
+      await engineRef.current.start((freq) => {
+        if (!freq || freq <= 0) {
+          confidenceRef.current = 0;
+          return;
+        }
 
-      const now = performance.now();
-      if (now - lastUiUpdateRef.current > 150) {
-        lastUiUpdateRef.current = now;
-        setPitch(smoothed);
-        setNote(freqToNote(smoothed));
-        setConfidence(confidenceRef.current);
-      }
-    });
+        if (!smoothRef.current) smoothRef.current = freq;
+        smoothRef.current = smoothRef.current * 0.85 + freq * 0.15;
+        const smoothed = smoothRef.current;
 
-    setIsRunning(true);
+        let continuity = 1;
+        if (prevPitchRef.current) {
+          const diff = Math.abs(smoothed - prevPitchRef.current) / prevPitchRef.current;
+          continuity = Math.max(0, 1 - diff * 5);
+        }
+        prevPitchRef.current = smoothed;
+
+        confidenceRef.current = Math.min(1, 0.3 + continuity * 0.7);
+
+        const now = performance.now();
+        if (now - lastUiUpdateRef.current > 150) {
+          lastUiUpdateRef.current = now;
+          setPitch(smoothed);
+          setNote(freqToNote(smoothed));
+          setConfidence(confidenceRef.current);
+        }
+      });
+
+      setIsRunning(true);
+      setError(null);
+    } catch (e) {
+      console.error(e);
+      setError("マイクが使用できません");
+    }
   };
 
-  const stop = () => {
-    engineRef.current?.stop();
-    setIsRunning(false);
-    setPitch(null);
-    setNote("--");
-    setConfidence(0);
-    prevPitchRef.current = null;
-    smoothRef.current = null;
-    confidenceRef.current = 0;
+  const stop = async () => {
+    try {
+      engineRef.current?.stop();
+      setIsRunning(false);
+
+      // 録音停止
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.stop();
+
+        // Blob -> Base64 -> API 送信
+        recorderRef.current.onstop = async () => {
+          try {
+            const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+              const base64Audio = reader.result.split(",")[1];
+              const res = await fetch(`${API_BASE}/api/score`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(import.meta.env.VITE_API_KEY && {
+                    Authorization: `Bearer ${import.meta.env.VITE_API_KEY}`,
+                  }),
+                },
+                body: JSON.stringify({ audio: base64Audio }),
+              });
+
+              const text = await res.text();
+              let json;
+              try {
+                json = JSON.parse(text);
+              } catch {
+                throw new Error("API が JSON を返していません");
+              }
+              if (!res.ok) throw new Error(json.error || "API Error");
+              setApiData(json);
+            };
+            reader.readAsDataURL(blob);
+          } catch (e) {
+            console.error(e);
+            setError("API 送信に失敗しました");
+          }
+        };
+      }
+
+      // UI リセット
+      setPitch(null);
+      setNote("--");
+      setConfidence(0);
+      prevPitchRef.current = null;
+      smoothRef.current = null;
+      confidenceRef.current = 0;
+      chunksRef.current = [];
+    } catch (e) {
+      console.error(e);
+      setError("停止処理でエラーが発生しました");
+    }
   };
 
   const targetFreq = noteToFreq(note);
 
   return (
     <div style={styles.container}>
-      <h2>VocaScan Tuner v2</h2>
+      <h2>VocaScan Tuner v2 + API</h2>
 
       <div style={styles.panel}>
         <div style={styles.value}>{note}</div>
         <div style={styles.sub}>
           Pitch: {pitch ? pitch.toFixed(2) : "--"} Hz
+          <br />
           安定度: {(confidence * 100).toFixed(0)}%
+          <br />
+          {apiData && <>API Score: {apiData.score ?? "--"}</>}
         </div>
       </div>
 
@@ -113,16 +188,14 @@ export default function VocaScanTuner() {
           <button onClick={stop} style={styles.stop}>Stop</button>
         )}
       </div>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
     </div>
   );
 }
 
 const styles = {
-  container: {
-    padding: "20px",
-    textAlign: "center",
-    fontFamily: "sans-serif"
-  },
+  container: { padding: "20px", textAlign: "center", fontFamily: "sans-serif" },
   panel: {
     margin: "20px auto",
     padding: "20px",
@@ -131,18 +204,9 @@ const styles = {
     background: "#f0f4ff",
     boxShadow: "0 4px 10px rgba(0,0,0,0.1)"
   },
-  value: {
-    fontSize: "48px",
-    fontWeight: "bold"
-  },
-  sub: {
-    marginTop: "6px",
-    fontSize: "13px",
-    color: "#555"
-  },
-  controls: {
-    marginTop: "20px"
-  },
+  value: { fontSize: "48px", fontWeight: "bold" },
+  sub: { marginTop: "6px", fontSize: "13px", color: "#555" },
+  controls: { marginTop: "20px" },
   start: {
     padding: "10px 24px",
     fontSize: "16px",
