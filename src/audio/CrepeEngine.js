@@ -1,3 +1,4 @@
+// src/CrepeEngine.js
 export class CrepeEngine {
   constructor() {
     this.running = false;
@@ -30,7 +31,6 @@ export class CrepeEngine {
     this.detector.getPitch((err, freq) => {
       if (!err && freq) onPitch(freq);
 
-      // 60fps は不要なので 80ms 程度に制限
       setTimeout(() => this.loop(onPitch), 80);
     });
   }
