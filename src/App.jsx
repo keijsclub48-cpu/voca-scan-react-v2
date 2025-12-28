@@ -1,20 +1,18 @@
-// App.jsx の例
+import { usePitchEngine } from './hooks/usePitchEngine';
 
-import React from 'react';
-import VocaScanTuner from './VocaScanTuner.jsx'; // 👈 VocaScanTuner をインポート
+export default function App() {
+  const { pitch, confidence, start, stop } = usePitchEngine();
 
-function App() {
   return (
-    <div className="App">
-      <header>
-        <h1>React Tuner Application</h1>
-      </header>
-      
-      {/* 👈 ここで VocaScanTuner をコンポーネントとして使用 */}
-      <VocaScanTuner /> 
-      
+    <div style={{ padding: 20 }}>
+      <h2>VocaScan V2 CREPE Test</h2>
+      <button onClick={start}>Start</button>
+      <button onClick={stop}>Stop</button>
+
+      <div style={{ marginTop: 20 }}>
+        <div>Pitch: {pitch ?? '--'} Hz</div>
+        <div>Confidence: {confidence ?? '--'}</div>
+      </div>
     </div>
   );
 }
-
-export default App;
