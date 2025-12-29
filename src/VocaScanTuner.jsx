@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CrepeEngine } from "./audio/CrepeEngine";
 import { ScoreClient } from "./api/ScoreClient";
+import PitchMeter from "./PitchMeter";
 
 function freqToNote(freq) {
   if (!freq || freq <= 0) return "--";
@@ -21,26 +22,26 @@ function noteToFreq(note) {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-function PitchMeter({ pitch, targetFreq, confidence }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const c = ref.current;
-    if (!c) return;
-    const ctx = c.getContext("2d");
-    const w = c.width, h = c.height;
-    ctx.clearRect(0,0,w,h);
-    if (!pitch || !targetFreq) return;
-    const max = w/2 - 10;
-    const diff = pitch - targetFreq;
-    const len = Math.min(Math.abs(diff)*5, max);
-    ctx.fillStyle = `rgba(76,175,80,${confidence})`;
-    if (diff >= 0) ctx.fillRect(w/2, h/4, len, h/2);
-    else ctx.fillRect(w/2-len, h/4, len, h/2);
-    ctx.strokeStyle="#555"; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(w/2,0); ctx.lineTo(w/2,h); ctx.stroke();
-  }, [pitch, targetFreq, confidence]);
-  return <canvas ref={ref} width={300} height={50} style={{margin:"10px auto",display:"block"}} />;
-}
+// function PitchMeter({ pitch, targetFreq, confidence }) {
+//   const ref = useRef(null);
+//   useEffect(() => {
+//     const c = ref.current;
+//     if (!c) return;
+//     const ctx = c.getContext("2d");
+//     const w = c.width, h = c.height;
+//     ctx.clearRect(0,0,w,h);
+//     if (!pitch || !targetFreq) return;
+//     const max = w/2 - 10;
+//     const diff = pitch - targetFreq;
+//     const len = Math.min(Math.abs(diff)*5, max);
+//     ctx.fillStyle = `rgba(76,175,80,${confidence})`;
+//     if (diff >= 0) ctx.fillRect(w/2, h/4, len, h/2);
+//     else ctx.fillRect(w/2-len, h/4, len, h/2);
+//     ctx.strokeStyle="#555"; ctx.lineWidth=2;
+//     ctx.beginPath(); ctx.moveTo(w/2,0); ctx.lineTo(w/2,h); ctx.stroke();
+//   }, [pitch, targetFreq, confidence]);
+//   return <canvas ref={ref} width={300} height={50} style={{margin:"10px auto",display:"block"}} />;
+// }
 
 export default function VocaScanTuner() {
   const engineRef = useRef(null);
