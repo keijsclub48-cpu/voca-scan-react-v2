@@ -1,0 +1,23 @@
+.pitch-meter-wrapper {
+  margin: 20px 0;
+  width: 220px;
+}
+
+.pitch-meter-background {
+  width: 200px;
+  height: 20px;
+  background-color: #ddd;
+  position: relative;
+  border-radius: 10px;
+}
+
+.pitch-meter-indicator {
+  width: 10px;
+  height: 20px;
+  background-color: #2196f3; /* 青 */
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 5px;
+  transition: transform 0.1s linear;
+}

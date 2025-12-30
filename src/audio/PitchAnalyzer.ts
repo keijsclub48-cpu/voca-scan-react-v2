@@ -1,11 +1,15 @@
-// src/audio/PitchAnalyzer.js
-export class PitchAnalyzer {
-  constructor() {
-    this.prevPitch = null;
-    this.smooth = null;
-  }
+// src/audio/PitchAnalyzer.ts
+export interface AnalyzeResult {
+  pitch: number;
+  note: string;
+  confidence: number;
+}
 
-  static freqToNote(freq) {
+export class PitchAnalyzer {
+  private prevPitch: number | null = null;
+  private smooth: number | null = null;
+
+  static freqToNote(freq: number): string {
     if (!freq || freq <= 0) return "--";
     const noteNames = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
     const midi = Math.round(12 * Math.log2(freq / 440) + 69);
@@ -14,9 +18,9 @@ export class PitchAnalyzer {
     return `${name}${octave}`;
   }
 
-  static noteToFreq(note) {
+  static noteToFreq(note: string): number | null {
     if (!note || note === "--") return null;
-    const map = {C:0,"C#":1,D:2,"D#":3,E:4,F:5,"F#":6,G:7,"G#":8,A:9,"A#":10,B:11};
+    const map: Record<string, number> = { C:0,"C#":1,D:2,"D#":3,E:4,F:5,"F#":6,G:7,"G#":8,A:9,"A#":10,B:11 };
     const m = note.match(/^([A-G]#?)(-?\d+)$/);
     if (!m) return null;
     const [, n, o] = m;
@@ -24,7 +28,7 @@ export class PitchAnalyzer {
     return 440 * Math.pow(2, (midi - 69) / 12);
   }
 
-  analyze(rawFreq) {
+  analyze(rawFreq: number): AnalyzeResult | null {
     if (!rawFreq) return null;
 
     if (!this.smooth) this.smooth = rawFreq;
@@ -32,7 +36,6 @@ export class PitchAnalyzer {
 
     const s = this.smooth;
 
-    // confidence 計算
     let confidence = 1;
     if (this.prevPitch) {
       confidence = Math.max(0, 1 - Math.abs(s - this.prevPitch)/this.prevPitch*5);
