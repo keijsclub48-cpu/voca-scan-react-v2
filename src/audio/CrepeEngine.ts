@@ -2,7 +2,7 @@ import { sendAudioToAPI } from "../apiClient";
 import { DiagnosisResult } from "../types";
 
 export class CrepeEngine {
-  private running: boolean = false;
+  private running = false;
   private audioContext: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
@@ -11,17 +11,19 @@ export class CrepeEngine {
 
   async start(onRawFrequency: (freq: number) => void): Promise<void> {
     if (this.running) return;
-    const ml5 = (window as any).ml5;
 
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const ml5 = (window as any).ml5;
+    if (!ml5) throw new Error("ml5 not loaded");
+
+    this.audioContext = new AudioContext();
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    this.mediaRecorder = new MediaRecorder(this.stream);
+    this.mediaRecorder = new MediaRecorder(this.stream, { mimeType: "audio/webm" });
     this.audioChunks = [];
-    this.mediaRecorder.ondataavailable = (e) => {
+    this.mediaRecorder.ondataavailable = e => {
       if (e.data.size > 0) this.audioChunks.push(e.data);
     };
-    this.mediaRecorder.start();
+    this.mediaRecorder.start(1000); // 1秒ごとにchunk化
 
     this.detector = await ml5.pitchDetection(
       "/model/pitch-detection/crepe/",
@@ -34,78 +36,72 @@ export class CrepeEngine {
     this.loop(onRawFrequency);
   }
 
-  private loop(callback: (freq: number) => void): void {
+  private loop(callback: (freq: number) => void) {
     if (!this.running || !this.detector) return;
+
     this.detector.getPitch((err: any, freq: number) => {
-      if (this.running) {
-        if (!err && freq) callback(freq);
-        setTimeout(() => this.loop(callback), 80);
-      }
+      if (this.running && !err && freq) callback(freq);
+      requestAnimationFrame(() => this.loop(callback));
     });
   }
 
-  // ★ 修正のキモ：Promiseを確実に resolve まで導く
   async stop(): Promise<DiagnosisResult> {
     this.running = false;
-    // デバッグ用：APIを待たずに即座に値を返してみる
-  return {
-    pitch: 440,
-    stability: 0.9,
-    score: 85
-  };
-  
-    console.log("CrepeEngine: Stopping...");
 
     return new Promise((resolve, reject) => {
-      if (!this.mediaRecorder) return reject("No recorder");
+      if (!this.mediaRecorder) return reject(new Error("No recorder"));
 
-      // 1. 先にイベントハンドラを登録
-      this.mediaRecorder.onstop = async () => {
-        try {
-          console.log("CrepeEngine: onstop triggered");
-          const blob = new Blob(this.audioChunks, { type: "audio/webm" });
-          const base64 = await this._blobToBase64(blob);
-
-          // ここでテスト用の値を直接入れてみます（apiClientを通さない）
-          const dummyResult: DiagnosisResult = {
-            pitch: 440,
-            stability: 0.9,
-            score: 85
-          };
-
-          console.log("CrepeEngine: Resolving with:", dummyResult);
-          resolve(dummyResult); // ★ ここで値が確定し、呼び出し元へ戻る
-        } catch (e) {
-          reject(e);
-        } finally {
-          this.cleanup();
-        }
+      this.mediaRecorder.onstop = () => {
+        // UI解放を優先
+        setTimeout(async () => {
+          try {
+            const blob = new Blob(this.audioChunks, { type: "audio/webm" });
+            const base64 = await this.blobToBase64(blob);
+            const result = await sendAudioToAPI(base64);
+            resolve(result);
+          } catch (e) {
+            reject(e);
+          } finally {
+            this.cleanup();
+          }
+        }, 0);
       };
 
-      // 2. 停止実行（これにより onstop が走る）
       this.mediaRecorder.stop();
     });
   }
 
   private cleanup() {
     this.stream?.getTracks().forEach(t => t.stop());
-    if (this.audioContext?.state !== "closed") this.audioContext?.close();
+    this.audioContext?.close();
+    this.mediaRecorder = null;
+    this.detector = null;
+    this.audioChunks = [];
   }
 
-  private _blobToBase64(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        if (result) {
-          // 結果が undefined にならないように空文字でフォールバック
-          resolve(result.split(",")[1] || "");
-        } else {
-          reject(new Error("Base64 conversion failed"));
-        }
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
+private blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Failed to convert blob to base64"));
+        return;
+      }
+
+      const base64 = result.split(",")[1];
+      if (!base64) {
+        reject(new Error("Invalid base64 format"));
+        return;
+      }
+
+      resolve(base64);
+    };
+
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 }

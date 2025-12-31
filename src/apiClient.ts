@@ -1,29 +1,25 @@
 // src/apiClient.ts
-// ★ 型のインポートを追加
 import { DiagnosisResult } from "./types";
 
 export async function sendAudioToAPI(base64Audio: string): Promise<DiagnosisResult> {
-  const baseUrl = window.location.hostname === "localhost" 
-    ? "http://localhost:3000" 
-    : "";
 
-  try {
-    const response = await fetch(`${baseUrl}/api/score`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ audio: base64Audio }),
-    });
+  // ★ ここが「先頭」です
+  console.log("API BASE:", import.meta.env.VITE_API_BASE);
+  console.log("API KEY:", import.meta.env.VITE_API_KEY);
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status}`);
-    }
+  const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/score`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${import.meta.env.VITE_API_KEY}`,
+    },
+    body: JSON.stringify({ audio: base64Audio }),
+  });
 
-    const data = await response.json();
-    console.log("apiClient success:", data);
-    return data as DiagnosisResult;
-  } catch (error) {
-    console.error("apiClient connection error:", error);
-    // 失敗しても止まらないよう、デフォルト値を返す
-    return { pitch: 0, stability: 0, score: 0 };
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API Error: ${res.status} ${text}`);
   }
+
+  return res.json();
 }
